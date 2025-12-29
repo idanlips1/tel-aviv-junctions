@@ -338,6 +338,28 @@ def get_junctions_dataframe(
     return df
 
 
+def get_junctions_geodataframe(
+    place_name: str = TEL_AVIV_PLACE_NAME,
+    clustered: bool = True,
+) -> gpd.GeoDataFrame:
+    """
+    Get junctions as a GeoDataFrame with geometry.
+    
+    Use this function when you need spatial operations (e.g., joining
+    accidents to junctions).
+    
+    Args:
+        place_name: Name of place to extract junctions from
+        clustered: If True, return clustered junctions; otherwise raw
+    
+    Returns:
+        GeoDataFrame with junction geometry and attributes
+    """
+    clustered_gdf, raw_gdf, _, _ = extract_clustered_junctions(place_name)
+    
+    return clustered_gdf if clustered else raw_gdf
+
+
 def export_to_csv(junctions_gdf: gpd.GeoDataFrame, output_path: str, clustered: bool = False) -> None:
     """Export junctions to CSV format."""
     if clustered:

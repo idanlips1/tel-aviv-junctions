@@ -16,6 +16,17 @@ from tel_aviv_junctions.config import (
     WGS84_CRS,
 )
 
+from tel_aviv_junctions.extraction import (
+    get_junctions_dataframe,
+    get_junctions_geodataframe,
+)
+
+from tel_aviv_junctions.spatial import (
+    load_israeli_accident_data,
+    accident_location_to_junction,
+    load_and_transform_israeli_accidents,
+)
+
 __version__ = "0.1.0"
 
 __all__ = [
@@ -25,7 +36,14 @@ __all__ = [
     "YEARS",
     "UTM_CRS",
     "WGS84_CRS",
-    # Modules (will be populated as we add them)
+    # Extraction functions
+    "get_junctions_dataframe",
+    "get_junctions_geodataframe",
+    # Spatial/accident functions
+    "load_israeli_accident_data",
+    "accident_location_to_junction",
+    "load_and_transform_israeli_accidents",
+    # Modules
     "extraction",
     "ohsome",
     "features",
