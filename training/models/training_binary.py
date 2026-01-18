@@ -42,6 +42,10 @@ CONFIG = {
     # Set to None to disable downsampling (use scale_pos_weight instead)
     'sampling_ratio': None,  # Using scale_pos_weight instead
     
+    # Validation split: fraction of training data for early stopping
+    # This avoids data leakage from using test data for validation
+    'validation_ratio': 0.15,  # 15% of training data for validation
+    
     # Classification threshold for baseline
     'baseline_threshold': 0.3,
     
@@ -103,6 +107,32 @@ class DataPipeline:
         print(f">> Test:  {len(test_df)} rows (years >= {split_year})")
         
         return train_df, test_df
+    
+    def get_validation_split(self, train_df):
+        """
+        Create a validation set from training data for early stopping.
+        Uses the most recent year(s) in training as validation to simulate
+        temporal forecasting while avoiding test data leakage.
+        """
+        val_ratio = self.config.get('validation_ratio', 0.15)
+        
+        if val_ratio is None or val_ratio <= 0:
+            print(">> Validation split: DISABLED")
+            return train_df, None
+        
+        # Use time-based split: most recent training year(s) as validation
+        # This better simulates the temporal nature of the problem
+        years = sorted(train_df['year'].unique())
+        n_val_years = max(1, int(len(years) * val_ratio))
+        val_years = years[-n_val_years:]
+        
+        val_df = train_df[train_df['year'].isin(val_years)].copy()
+        train_subset = train_df[~train_df['year'].isin(val_years)].copy()
+        
+        print(f">> Validation split: years {val_years} held out for early stopping")
+        print(f">> Train subset: {len(train_subset)} rows, Validation: {len(val_df)} rows")
+        
+        return train_subset, val_df
     
     def downsample(self, train_df):
         """
@@ -273,7 +303,16 @@ def find_optimal_threshold(y_true, y_prob, metric='f1'):
     """
     precision, recall, thresholds = precision_recall_curve(y_true, y_prob)
     
-    # Calculate F1 for each threshold
+    # precision_recall_curve returns:
+    # - precision: length n+1 (last value is 1.0, corresponds to "predict nothing")
+    # - recall: length n+1 (last value is 0.0)
+    # - thresholds: length n
+    # We only consider indices 0 to n-1 where we have valid thresholds
+    n_thresholds = len(thresholds)
+    precision = precision[:n_thresholds]
+    recall = recall[:n_thresholds]
+    
+    # Calculate F1 for each valid threshold
     f1_scores = 2 * precision * recall / (precision + recall + 1e-10)
     
     if metric == 'f1':
@@ -295,10 +334,6 @@ def find_optimal_threshold(y_true, y_prob, metric='f1'):
     else:
         best_idx = np.argmax(f1_scores)
     
-    # Handle edge case where best_idx is beyond thresholds array
-    if best_idx >= len(thresholds):
-        best_idx = len(thresholds) - 1
-    
     return thresholds[best_idx], {
         'threshold': thresholds[best_idx],
         'precision': precision[best_idx],
@@ -317,8 +352,11 @@ def evaluate_model(y_true, y_pred, y_prob, model_name):
         'AUC': roc_auc_score(y_true, y_prob) if len(np.unique(y_true)) > 1 else 0.0
     }
     
-    # Confusion matrix
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    # Confusion matrix - handle edge case where only one class is present
+    # confusion_matrix returns 1x1 if y_true has only one class
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    # labels=[0, 1] ensures a 2x2 matrix even if one class is missing
+    tn, fp, fn, tp = cm.ravel()
     metrics['TP'] = tp
     metrics['FP'] = fp
     metrics['TN'] = tn
@@ -393,18 +431,22 @@ if __name__ == "__main__":
                                        "Historical Baseline")
     results.append(baseline_metrics)
     
-    # 5. XGBoost Classifier (trained on downsampled data)
+    # 5. Create validation split from training data (avoids test data leakage)
+    print("\n" + "-" * 70)
+    train_subset, val_df = pipeline.get_validation_split(train_df_balanced)
+    
+    # 6. XGBoost Classifier (trained on train subset, validated on held-out train data)
     print("\n" + "-" * 70)
     xgb_model = XGBoostClassifier(
         CONFIG['xgb_params'], 
         CONFIG['features'],
         use_scale_pos_weight=use_scale_pos_weight
     )
-    xgb_model.fit(train_df_balanced, val_df=test_df)
+    xgb_model.fit(train_subset, val_df=val_df)  # Uses validation split, NOT test data
     
     xgb_probs = xgb_model.predict_proba(test_df)
     
-    # 6. Find optimal threshold for XGBoost
+    # 7. Find optimal threshold for XGBoost
     print("\n" + "-" * 70)
     print(">> Finding optimal threshold for XGBoost...")
     optimal_thresh, thresh_metrics = find_optimal_threshold(y_test, xgb_probs, metric='f1')
@@ -424,10 +466,10 @@ if __name__ == "__main__":
                                           f"XGBoost (thresh={optimal_thresh:.2f})")
     results.append(xgb_metrics_optimal)
     
-    # 7. Print comparison
+    # 8. Print comparison
     print_results(results)
     
-    # 8. Summary
+    # 9. Summary
     print("\n" + "=" * 70)
     print("SUMMARY")
     print("=" * 70)
